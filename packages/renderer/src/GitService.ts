@@ -7,6 +7,13 @@ interface Branches {
   current: string|null
 }
 
+interface TrackPathAsLFSResult {
+  ok: boolean,
+  alreadyTracked: boolean,
+  pattern: string,
+  error?: string
+}
+
 export interface LFSJsonFile {
   name: string,
   size: number,
@@ -28,6 +35,14 @@ const lfs_blacklist : {
       starts:['isa.','.git'],
       ends: ['.cwl','.yml','.yaml']
     }
+
+const normalizeRelativePath = (path: string | undefined) => {
+  return (path || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+}
+
+const encodeLFSRulePath = (path: string) => {
+  return path.replace(/\s/g, '[[:space:]]');
+}
 
 const GitService = {
 
@@ -303,6 +318,105 @@ const GitService = {
     return AppProperties.user && url.includes(AppProperties.user.host) && GitService.get_url_credentials(url)===''
       ? `https://oauth2:${AppProperties.user.token.access_token}@${AppProperties.user.host}` + url.split(AppProperties.user.host)[1]
       : url;
+  },
+
+  track_path_as_lfs: async (relativePath: string, isDirectory: boolean): Promise<TrackPathAsLFSResult> => {
+    if (!ArcControlService.props.arc_root) {
+      return {
+        ok: false,
+        alreadyTracked: false,
+        pattern: '',
+        error: 'No ARC root is available for Git LFS tracking.'
+      };
+    }
+
+    const normalizedRelativePath = normalizeRelativePath(relativePath);
+    if (!normalizedRelativePath) {
+      return {
+        ok: false,
+        alreadyTracked: false,
+        pattern: '',
+        error: 'Invalid path for LFS tracking.'
+      };
+    }
+
+    const pattern = isDirectory ? `${normalizedRelativePath}/**` : normalizedRelativePath;
+    const safePattern = encodeLFSRulePath(pattern);
+    const lfsRule = `${safePattern} filter=lfs diff=lfs merge=lfs -text`;
+    const attributesPath = ArcControlService.props.arc_root + '/.gitattributes';
+
+    const gitattributesRaw = await window.ipc.invoke('LocalFileSystemService.readFile', attributesPath);
+    const rows = String(gitattributesRaw || '').split('\n').filter(r=>r!=='');
+    const preservedRows: string[] = [];
+    const lfsRows: Record<string, string> = {};
+
+    let alreadyTracked = false;
+    for(const row of rows) {
+      const split = row.split(' filter=lfs ');
+      if (split.length > 1) {
+        const key = split[0];
+        if (key === safePattern || key === pattern)
+          alreadyTracked = true;
+        if (!lfsRows[key])
+          lfsRows[key] = row;
+      } else {
+        preservedRows.push(row);
+      }
+    }
+
+    if (!alreadyTracked)
+      lfsRows[safePattern] = lfsRule;
+
+    const writeResult = await window.ipc.invoke('LocalFileSystemService.writeFile', [
+      attributesPath,
+      preservedRows.concat(Object.values(lfsRows)).join('\n') + '\n'
+    ]);
+    if (!writeResult || writeResult.ok === false) {
+      return {
+        ok: false,
+        alreadyTracked,
+        pattern,
+        error: writeResult?.error || 'Unable to update .gitattributes'
+      };
+    }
+
+    let response = await window.ipc.invoke('GitService.run', {
+      args: ['add', '--', '.gitattributes'],
+      cwd: ArcControlService.props.arc_root
+    });
+    if(!response[0]) {
+      return {
+        ok: false,
+        alreadyTracked,
+        pattern,
+        error: response[1] || 'Unable to stage .gitattributes'
+      };
+    }
+
+    // Re-apply clean filters after updating attributes; fallback add handles untracked files.
+    await window.ipc.invoke('GitService.run', {
+      args: ['add', '--renormalize', '--', normalizedRelativePath],
+      cwd: ArcControlService.props.arc_root
+    });
+
+    response = await window.ipc.invoke('GitService.run', {
+      args: ['add', '--', normalizedRelativePath],
+      cwd: ArcControlService.props.arc_root
+    });
+    if(!response[0]) {
+      return {
+        ok: false,
+        alreadyTracked,
+        pattern,
+        error: response[1] || `Unable to stage path ${normalizedRelativePath}`
+      };
+    }
+
+    return {
+      ok: true,
+      alreadyTracked,
+      pattern
+    };
   },
 
   set_git_user: async(name,email)=>{

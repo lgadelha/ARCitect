@@ -579,6 +579,56 @@ const downloadLFSFiles = async paths => {
   await useDownloadLFSFiles($q, paths, props.nodes);
 };
 
+const refreshLFSInfo = async () => {
+  const lfs = await GitService.get_all_lfs_info();
+  const map: LFSJsonFileMap = {};
+  for (const f of lfs.files) {
+    map[f.name] = f;
+  }
+  props.lfsInfo = map;
+};
+
+const refreshTreeBranch = (node: ArcTreeViewNode) => {
+  if(!arcTree.value)
+    return;
+  const key = node.isDirectory ? node.id : node.id.split('/').slice(0,-1).join('/');
+  if (!key)
+    return;
+  const parentNode = arcTree.value.getNodeByKey(key);
+  if(!parentNode)
+    return;
+  const isExpanded = arcTree.value.isExpanded(key);
+  delete parentNode.children;
+  if(isExpanded)
+    arcTree.value.setExpanded(key,true);
+};
+
+const trackWithLFS = async (node: ArcTreeViewNode) => {
+  if (!node.id_rel)
+    return;
+  const result = await GitService.track_path_as_lfs(node.id_rel, node.isDirectory);
+  if (!result.ok) {
+    return $q.dialog({
+      component: ConfirmationDialog,
+      componentProps: {
+        title: 'Git LFS Track Error',
+        msg: result.error || 'Unable to track path with Git LFS.'
+      }
+    });
+  }
+
+  await refreshLFSInfo();
+  refreshTreeBranch(node);
+  AppProperties.node_needs_refresh = true;
+
+  $q.notify({
+    type: result.alreadyTracked ? 'info' : 'positive',
+    message: result.alreadyTracked
+      ? `Path is already tracked with Git LFS: ${result.pattern}`
+      : `Path is now tracked with Git LFS: ${result.pattern}`
+  });
+};
+
 const onCellContextMenu = async (e,node: ArcTreeViewNode) => {
   if(node.type==='empty') return;
   e.preventDefault();
@@ -659,6 +709,13 @@ const onCellContextMenu = async (e,node: ArcTreeViewNode) => {
       icon: h( 'i', icon_style, ['drive_folder_upload'] ),
       onClick: ()=>importFilesOrDirectories(node,'selectAnyDirectories')
     });
+    const isArcRootDirectory = node.id===props.root || normalizeRelativePath(node.id_rel)==='';
+    if(!isArcRootDirectory && !AppProperties.git_dialog_state.visible)
+      items.push({
+        label: "Track Folder with LFS",
+        icon: h( 'i', icon_style, ['cloud_sync'] ),
+        onClick: () => trackWithLFS(node)
+      });
     const canDownloadLFSDirectory = hasLFSFilesInDirectory(node.id_rel);
     if(canDownloadLFSDirectory && !AppProperties.git_dialog_state.visible)
       items.push({
@@ -667,6 +724,12 @@ const onCellContextMenu = async (e,node: ArcTreeViewNode) => {
         onClick: () => downloadLFSFiles([toLFSDirectoryIncludePattern(node.id_rel)])
       });
   } else {
+    if(!node.isLFS && !AppProperties.git_dialog_state.visible)
+      items.push({
+        label: "Track with LFS",
+        icon: h( 'i', icon_style, ['cloud_sync'] ),
+        onClick: () => trackWithLFS(node)
+      });
     if(node.isLFSPointer){
       if(!node.downloaded && !AppProperties.git_dialog_state.visible)
         items.push({
