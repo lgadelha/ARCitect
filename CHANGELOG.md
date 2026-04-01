@@ -20,6 +20,10 @@ where applicable. Add your name in the style of `(by @github-username)` at the e
 
 ## [Unreleased]
 
+### ✨ Added
+
+- Add "Download LFS files" to file tree context menu on directories. This option allows users to download all LFS files in a directory at once (by @Freymaurer)
+
 ## 1.6.1 - 2026-03-04
 
 ### 🐛 Fixed
