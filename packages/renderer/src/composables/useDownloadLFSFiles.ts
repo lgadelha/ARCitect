@@ -14,6 +14,24 @@ function recUpdateNodes(fn: (n: ArcTreeViewNode)=>void, nodes: ArcTreeViewNode[]
   }
 }
 
+function normalizePath(path: string | undefined) {
+  return (path || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+}
+
+function normalizeIncludePath(path: string) {
+  return normalizePath(path.replace(/\/\*\*$/, ''));
+}
+
+function matchesIncludePath(nodePath: string | undefined, includePath: string) {
+  const normalizedNodePath = normalizePath(nodePath);
+  const normalizedIncludePath = normalizeIncludePath(includePath);
+  if (!normalizedNodePath)
+    return false;
+  if (!normalizedIncludePath)
+    return true;
+  return normalizedNodePath === normalizedIncludePath || normalizedNodePath.startsWith(normalizedIncludePath + '/');
+}
+
 /**
  * Composable for downloading LFS files from the frontend.
  * Handles authentication, dialogs, and updates node states if provided.
@@ -96,9 +114,9 @@ export async function useDownloadLFSFiles(
     });
 
   if (updateNodes) {
+    const includePaths = paths.map(normalizeIncludePath);
     recUpdateNodes((n: any) => {
-      const cleanedPaths = paths.map(p => p.replace(/\*\*$/, ''));
-      if (n.isLFS && cleanedPaths.some(p => n.id_rel.includes(p))) {
+      if (n.isLFS && includePaths.some(includePath => matchesIncludePath(n.id_rel, includePath))) {
         n.downloaded = true;
         n.isLFSPointer = false;
       }

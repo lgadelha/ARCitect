@@ -41,6 +41,7 @@ export interface ArcTreeViewNode {
     children?: ArcTreeViewNode[];
     id_rel?: string;
     isLFS?: boolean;
+    isLFSDirectory?: boolean;
     isLFSPointer?: boolean;
     checkout?: boolean;
     downloaded?: boolean;
@@ -66,6 +67,26 @@ let update_path_listener: null | (() => Promise<void>) = null;
 
 const props = reactive(init);
 const arcTree = ref(null);
+
+function normalizeRelativePath(path: string | undefined) {
+  return (path || '').replace(/^\/+|\/+$/g, '');
+}
+
+function hasLFSFilesInDirectory(path: string | undefined) {
+  if (!props.lfsInfo)
+    return false;
+  const relPath = normalizeRelativePath(path);
+  const lfsPaths = Object.keys(props.lfsInfo);
+  if (relPath === '')
+    return lfsPaths.length > 0;
+  const prefix = relPath + '/';
+  return lfsPaths.some(p => p.startsWith(prefix));
+}
+
+function toLFSDirectoryIncludePattern(path: string | undefined) {
+  const relPath = normalizeRelativePath(path);
+  return relPath ? `${relPath}/**` : '**';
+}
 
 function formatNodeEditString(contentType: string) {
   return NodeEdit_PreFix + contentType;
@@ -323,6 +344,7 @@ const readDir_ = async (path: string) => {
     n.id_rel = n.id.replace(ArcControlService.props.arc_root+'/', '');
     n.lazy = n.isDirectory;
     n.isSelectable = !n.isDirectory
+    n.isLFSDirectory = n.isDirectory ? hasLFSFilesInDirectory(n.id_rel) : false;
 
     let isLFS = props.lfsInfo && props.lfsInfo[n.id_rel]
 
@@ -637,11 +659,12 @@ const onCellContextMenu = async (e,node: ArcTreeViewNode) => {
       icon: h( 'i', icon_style, ['drive_folder_upload'] ),
       onClick: ()=>importFilesOrDirectories(node,'selectAnyDirectories')
     });
-    if(node.isLFSDirectory && !AppProperties.git_dialog_state.visible)
+    const canDownloadLFSDirectory = hasLFSFilesInDirectory(node.id_rel);
+    if(canDownloadLFSDirectory && !AppProperties.git_dialog_state.visible)
       items.push({
         label: "Download LFS Files",
         icon: h( 'i', icon_style, ['cloud_download'] ),
-        onClick: () => downloadLFSFiles([node.id_rel ? node.id_rel + '/**' : ''])
+        onClick: () => downloadLFSFiles([toLFSDirectoryIncludePattern(node.id_rel)])
       });
   } else {
     if(node.isLFSPointer){
